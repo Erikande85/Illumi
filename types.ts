@@ -3,7 +3,7 @@ export enum MediaType {
   VIDEO = 'VIDEO',
   IMAGE = 'IMAGE',
   AUDIO = 'AUDIO',
-  EMPTY = 'EMPTY', // For placeholder clips
+  EMPTY = 'EMPTY',
 }
 
 export enum AIBackendType {
@@ -23,28 +23,30 @@ export interface Asset {
   type: MediaType;
   url: string;
   thumbnail?: string;
-  duration?: number; // in seconds
-  createdVia?: AIBackendType;
-  file?: File; // For local files
+  duration?: number;
 }
 
 export interface Clip {
   id: string;
   assetId: string;
   trackId: string;
-  startTime: number; // timeline position in seconds
-  duration: number; // duration in seconds
-  offset: number; // offset into the source media
+  startTime: number;
+  duration: number;
+  offset: number;
   name: string;
   type: MediaType;
   color: string;
-  isSelected?: boolean;
   
+  // Added for robust playback in the new engine
+  url?: string; 
+  
+  // Audio Properties
+  volume?: number; // 0.0 to 1.0 (Default 1.0)
+  waveformData?: number[]; // Optional cache for real PCM data
+
   // AI Metadata
   prompt?: string;
   seed?: number;
-  motionSetting?: string;
-  aiParams?: Record<string, any>;
 }
 
 export interface Track {
@@ -61,33 +63,6 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
 }
-
-export interface ProjectState {
-  settings: ProjectSettings;
-  currentTime: number; // in seconds
-  zoomLevel: number; // pixels per second
-  tracks: Track[];
-  clips: Clip[];
-  assets: Asset[];
-  selection: string[]; // clip IDs
-  isPlaying: boolean;
-}
-
-// Drag and Drop State
-export interface DragState {
-  isDragging: boolean;
-  clipId: string | null;
-  type: 'MOVE' | 'RESIZE_START' | 'RESIZE_END' | 'DRAW'; // Added DRAW
-  startX: number;
-  originalStartTime: number;
-  originalDuration: number;
-  originalOffset: number;
-  
-  // For Drawing
-  trackId?: string;
-}
-
-// --- EXPORT ARCHITECTURE TYPES ---
 
 export enum JobStatus {
   PENDING = 'PENDING',
@@ -139,9 +114,3 @@ export interface RenderJob {
   resultUrl?: string;
   logs: string[];
 }
-
-export const MOCK_ASSETS: Asset[] = [
-  { id: 'a1', name: 'Demo_Drone_Footage.mp4', type: MediaType.VIDEO, url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', thumbnail: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.jpg', duration: 596 },
-  { id: 'a2', name: 'Demo_Cyberpunk_Still.png', type: MediaType.IMAGE, url: 'https://picsum.photos/seed/cyberpunk/1280/720', thumbnail: 'https://picsum.photos/seed/cyberpunk/320/180', duration: 5 },
-  { id: 'a3', name: 'Background_Ambience.mp3', type: MediaType.AUDIO, url: 'https://actions.google.com/sounds/v1/ambiences/coffee_shop.ogg', duration: 120 },
-];

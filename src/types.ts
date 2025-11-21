@@ -1,4 +1,3 @@
-
 export enum MediaType {
   VIDEO = 'VIDEO',
   IMAGE = 'IMAGE',
@@ -24,6 +23,8 @@ export interface Asset {
   url: string;
   thumbnail?: string;
   duration?: number;
+  createdVia?: AIBackendType;
+  file?: File;
 }
 
 export interface Clip {
@@ -36,10 +37,20 @@ export interface Clip {
   name: string;
   type: MediaType;
   color: string;
+  url?: string;
   
-  // Added for robust playback in the new engine
-  url?: string; 
+  // Spatial & Visual Properties
+  x?: number; // 0.0 to 1.0 (Relative center X)
+  y?: number; // 0.0 to 1.0 (Relative center Y)
+  scale?: number; // 1.0 = 100%
+  rotation?: number; // Degrees
+  opacity?: number; // 0.0 to 1.0
+  zIndex?: number; // Render order
   
+  // Audio Properties
+  volume?: number; // 0.0 to 1.0 (Default 1.0)
+  waveformData?: number[]; // Optional cache for real PCM data
+
   // AI Metadata
   prompt?: string;
   seed?: number;
@@ -60,9 +71,55 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+// --- EXPORT ARCHITECTURE TYPES ---
+
+export enum JobStatus {
+  PENDING = 'PENDING',
+  RENDERING = 'RENDERING',
+  ENCODING = 'ENCODING',
+  COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
+  CANCELLED = 'CANCELLED'
+}
+
+export enum Codec {
+  H264 = 'avc1.4d002a', // Baseline
+  H265 = 'hvc1.1.6.L93.B0',
+  VP9 = 'vp09.00.10.08',
+  AV1 = 'av01.0.04M.08'
+}
+
+export enum Container {
+  MP4 = 'mp4',
+  WEBM = 'webm',
+  MOV = 'mov'
+}
+
+export enum EncoderType {
+  WEBCODECS = 'Tier 1: WebCodecs (Frame Accurate)',
+  MEDIA_RECORDER = 'Tier 0: Quick Preview (Real-time)',
+  FFMPEG_WASM = 'Tier 2: FFmpeg WASM (Software)',
+}
+
 export interface ExportConfig {
   filename: string;
   width: number;
   height: number;
   fps: number;
+  codec: Codec;
+  container: Container;
+  bitrate: number; // in bps
+  encoderType: EncoderType;
+}
+
+export interface RenderJob {
+  id: string;
+  projectId: string;
+  config: ExportConfig;
+  status: JobStatus;
+  progress: number; // 0 to 100
+  startTime: number;
+  error?: string;
+  resultUrl?: string;
+  logs: string[];
 }

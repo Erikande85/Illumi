@@ -1,278 +1,261 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipBack, SkipForward, Settings, Share, FolderOpen, Upload, Maximize2, X, Wand2, Layers, MonitorPlay, Download, Plus } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useStore } from './store/useStore';
 import { Timeline } from './components/Timeline';
-import { AICopilot } from './components/AICopilot';
-import { WebGLRenderer } from './components/WebGLRenderer';
-import { ExportPanel } from './components/ExportPanel';
+import { Player } from './components/Player';
 import { InspectorPanel } from './components/InspectorPanel';
-import { MOCK_ASSETS, Asset, Track, Clip, MediaType, AIBackendType, ProjectState, ExportConfig, ProjectSettings } from './types';
-import { ExportManager } from './services/ExportService';
-import { generateImageComponent, generateNextShot, generateRemix } from './services/geminiService';
-
-// Initial State Configuration
-const INITIAL_TRACKS: Track[] = [
-  { id: 'V2', name: 'Overlay / FX', type: 'video', isMuted: false, isLocked: false },
-  { id: 'V1', name: 'Main Camera', type: 'video', isMuted: false, isLocked: false },
-  { id: 'A1', name: 'Dialogue', type: 'audio', isMuted: false, isLocked: false },
-  { id: 'A2', name: 'Music', type: 'audio', isMuted: false, isLocked: false },
-];
-
-const DEFAULT_SETTINGS: ProjectSettings = {
-    resolution: { width: 1920, height: 1080 },
-    fps: 24,
-    aspectRatio: '16:9'
-};
+import { GenerationModal } from './components/GenerationModal';
+import { ExportPanel } from './components/ExportPanel'; // Assuming this component exists based on file list
+import { MediaType, Clip, ExportConfig } from './types';
+import { Layers, Plus, Upload, Play, Pause, SkipBack, MonitorPlay, Share, Download, Zap } from 'lucide-react';
 
 export default function App() {
-  const [project, setProject] = useState<ProjectState>({
-    settings: DEFAULT_SETTINGS,
-    currentTime: 0,
-    zoomLevel: 20,
-    tracks: INITIAL_TRACKS,
-    clips: [],
-    assets: MOCK_ASSETS,
-    selection: [],
-    isPlaying: false
-  });
-
-  const [exportPanelOpen, setExportPanelOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'media' | 'effects'>('media');
+  const { 
+    hasProject, createNewProject, isPlaying, togglePlayback, 
+    setPlayheadTime, playheadTime, addClip 
+  } = useStore();
+  
+  const [isGenModalOpen, setIsGenModalOpen] = useState(false);
+  const [genModalType, setGenModalType] = useState<MediaType>(MediaType.IMAGE);
+  const [isExportOpen, setIsExportOpen] = useState(false);
+  const [activeView, setActiveView] = useState<'edit' | 'ai'>('edit');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Get current selection object
-  const selectedClip = project.clips.find(c => project.selection.includes(c.id)) || null;
+  // --- ACTIONS ---
 
-  // High-Frequency Playback Loop
+  const handleProjectClick = () => {
+    if (window.confirm("Start a new project? Any unsaved changes will be lost.")) {
+      createNewProject();
+    }
+  };
+
+  const handleEditClick = () => {
+    setActiveView('edit');
+  };
+
+  const handleAIToolsClick = () => {
+    setGenModalType(MediaType.IMAGE);
+    setIsGenModalOpen(true);
+    setActiveView('ai');
+  };
+
+  const handleStartExport = (config: ExportConfig) => {
+    console.log("Starting Export with config:", config);
+    // In a real integration, this would call ExportManager.getInstance().createJob(...)
+    // For now we just close the panel
+    setIsExportOpen(false);
+    alert(`Export started: ${config.filename}.${config.container}`);
+  };
+
+  // --- GLOBAL DRAG AND DROP ---
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    if (!hasProject) return;
+
+    const files = Array.from(e.dataTransfer.files);
+    files.forEach((file) => {
+      const url = URL.createObjectURL(file);
+      const type = file.type.startsWith('video') ? MediaType.VIDEO 
+                 : file.type.startsWith('audio') ? MediaType.AUDIO 
+                 : MediaType.IMAGE;
+      
+      const trackId = type === MediaType.AUDIO ? 'A1' : 'V1';
+      const duration = type === MediaType.IMAGE ? 5 : 10; 
+
+      const newClip: Clip = {
+        id: `clip_${Date.now()}_${Math.random().toString(36).substr(2,9)}`,
+        assetId: 'local_file',
+        name: file.name,
+        type,
+        trackId,
+        startTime: playheadTime,
+        duration,
+        offset: 0,
+        color: type === MediaType.VIDEO ? 'blue' : 'green',
+        url: url
+      };
+      
+      addClip(newClip);
+    });
+  }, [hasProject, playheadTime, addClip]);
+
+  const handleDragOver = (e: React.DragEvent) => e.preventDefault();
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+        // Mock drop event
+        const mockDrop = {
+            preventDefault: () => {},
+            dataTransfer: { files: e.target.files }
+        } as unknown as React.DragEvent;
+        handleDrop(mockDrop);
+    }
+  };
+
+  // --- KEYBOARD & LOOP ---
   useEffect(() => {
-    let animationFrameId: number;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && hasProject && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        togglePlayback();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    let animationFrame: number;
     let lastTime = performance.now();
 
     const loop = (time: number) => {
-      if (project.isPlaying) {
+      if (isPlaying) {
         const delta = (time - lastTime) / 1000;
-        setProject(p => {
-            if (p.currentTime >= 300) return { ...p, isPlaying: false };
-            return { ...p, currentTime: p.currentTime + delta };
-        });
+        setPlayheadTime(playheadTime + delta);
       }
       lastTime = time;
-      animationFrameId = requestAnimationFrame(loop);
+      animationFrame = requestAnimationFrame(loop);
     };
 
-    if (project.isPlaying) {
-        lastTime = performance.now();
-        animationFrameId = requestAnimationFrame(loop);
+    if (isPlaying) {
+      lastTime = performance.now();
+      animationFrame = requestAnimationFrame(loop);
     }
 
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [project.isPlaying]);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      cancelAnimationFrame(animationFrame);
+    };
+  }, [hasProject, isPlaying, playheadTime, togglePlayback, setPlayheadTime]);
 
-  // --- HANDLERS ---
-
-  const handleStartExport = (config: ExportConfig) => {
-      ExportManager.getInstance().createJob(config, project.clips, project.assets, 30);
-  };
-
-  const handleClipChange = (updatedClip: Clip) => {
-      setProject(prev => ({
-          ...prev,
-          clips: prev.clips.map(c => c.id === updatedClip.id ? updatedClip : c)
-      }));
-  };
-
-  const handleClipSelect = (clipId: string, multi: boolean) => {
-      setProject(prev => ({
-          ...prev,
-          selection: multi ? [...prev.selection, clipId] : [clipId]
-      }));
-  };
-
-  const handleDrawClip = (trackId: string, startTime: number, duration: number) => {
-      const newClip: Clip = {
-          id: `empty_${Date.now()}`,
-          assetId: '',
-          trackId,
-          startTime,
-          duration,
-          offset: 0,
-          name: 'Generative Shot',
-          type: MediaType.EMPTY,
-          color: 'zinc',
-          prompt: ''
-      };
-      setProject(prev => ({
-          ...prev,
-          clips: [...prev.clips, newClip],
-          selection: [newClip.id] // Auto select to open Inspector
-      }));
-  };
-
-  const handleGenerateFirstFrame = async (prompt: string, style: string) => {
-      if (!selectedClip) return;
-      
-      // 1. Call API
-      const result = await generateImageComponent(prompt + ", " + style, AIBackendType.CLOUD);
-      
-      // 2. Create Asset
-      const newAsset: Asset = {
-          id: `gen_${Date.now()}`,
-          name: prompt.substring(0, 15),
-          type: MediaType.IMAGE,
-          url: result.url,
-          duration: selectedClip.duration
-      };
-
-      // 3. Update Clip from EMPTY to IMAGE
-      const updatedClip: Clip = {
-          ...selectedClip,
-          type: MediaType.IMAGE,
-          assetId: newAsset.id,
-          name: newAsset.name,
-          prompt: prompt
-      };
-
-      setProject(prev => ({
-          ...prev,
-          assets: [newAsset, ...prev.assets],
-          clips: prev.clips.map(c => c.id === selectedClip.id ? updatedClip : c)
-      }));
-  };
-
-  const handleGenerateVideo = async (clipId: string, settings: any) => {
-      // Mock Video Generation Flow
-      alert(`Generating Video with prompt: ${settings.prompt}`);
-      // Logic would transform IMAGE clip to VIDEO clip here after async job
-  };
-
-  const handleContextAction = async (action: string, clip: Clip) => {
-      if (action === 'next_shot') {
-           const result = await generateNextShot(clip.id);
-           const newClip: Clip = {
-               id: `next_${Date.now()}`,
-               trackId: clip.trackId,
-               startTime: clip.startTime + clip.duration,
-               duration: 4,
-               offset: 0,
-               name: 'Next Shot',
-               type: MediaType.IMAGE,
-               assetId: 'pending',
-               color: 'purple'
-           };
-           // In real app, we'd add the asset too
-           setProject(prev => ({...prev, clips: [...prev.clips, newClip]}));
-      } else if (action === 'remix') {
-           await generateRemix(clip.id);
-           alert("Remix variants generated in Media Pool");
-      } else if (action === 'make_video') {
-           // Trigger inspector mode switch or modal
-      }
-  };
+  // --- WELCOME SCREEN ---
+  if (!hasProject) {
+    return (
+      <div className="h-screen w-screen bg-black flex flex-col items-center justify-center text-white select-none">
+        <div className="relative mb-8">
+            <div className="absolute -inset-4 bg-blue-500/20 blur-xl rounded-full" />
+            <Layers size={64} className="text-blue-500 relative z-10" />
+        </div>
+        <h1 className="text-5xl font-bold mb-3 tracking-tighter">Illumi<span className="text-zinc-600">.ai</span></h1>
+        <p className="text-zinc-500 mb-8 font-light">The AI-Native Non-Linear Editor</p>
+        <button 
+          onClick={createNewProject}
+          className="bg-white text-black px-8 py-3 rounded-full font-bold hover:bg-zinc-200 transition flex items-center gap-2 shadow-lg shadow-white/10"
+        >
+          <Plus size={20} /> New Project
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col h-screen bg-black text-zinc-300 font-sans overflow-hidden">
-      
+    <div 
+      className="flex flex-col h-screen bg-black text-zinc-300 font-sans overflow-hidden"
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+    >
       {/* HEADER */}
-      <header className="h-12 border-b border-zinc-800 bg-zinc-950 flex items-center justify-between px-4 select-none z-50">
+      <header className="h-12 border-b border-zinc-800 bg-zinc-950 flex items-center justify-between px-4 z-50 select-none">
         <div className="flex items-center gap-6">
-            <h1 className="text-xl font-bold text-white tracking-tighter flex items-center gap-1">
-                <Layers className="text-accent-500" size={20}/> Illumi<span className="text-zinc-500 font-light">.ai</span>
-            </h1>
-            <nav className="flex gap-4 text-sm font-medium text-zinc-400">
-                <span className="hover:text-white cursor-pointer">Project</span>
-                <span className="hover:text-white cursor-pointer">Edit</span>
-                <span className="hover:text-white cursor-pointer text-accent-400">AI Tools</span>
-            </nav>
+          <div className="flex items-center gap-2">
+            <Layers className="text-blue-500" size={20}/>
+            <span className="font-bold text-white tracking-tight">Illumi Project</span>
+          </div>
+          
+          {/* Navigation Buttons */}
+          <nav className="flex gap-1 text-sm font-medium text-zinc-400 border-l border-zinc-800 pl-6 h-6 items-center">
+             <button 
+                onClick={handleProjectClick} 
+                className="hover:text-white px-3 py-1 rounded hover:bg-zinc-800 transition-colors"
+             >
+                Project
+             </button>
+             <button 
+                onClick={handleEditClick} 
+                className={`px-3 py-1 rounded transition-colors ${activeView === 'edit' ? 'text-white bg-zinc-800' : 'hover:text-white hover:bg-zinc-800'}`}
+             >
+                Edit
+             </button>
+             <button 
+                onClick={handleAIToolsClick} 
+                className={`px-3 py-1 rounded transition-colors flex items-center gap-1 ${activeView === 'ai' ? 'text-accent-400 bg-zinc-800' : 'hover:text-accent-400 hover:bg-zinc-800'}`}
+             >
+                <Zap size={12} /> AI Tools
+             </button>
+          </nav>
         </div>
-        <div className="flex items-center gap-4">
-            <div className="text-xs text-zinc-500 flex gap-2">
-                <span className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">{project.settings.resolution.width}x{project.settings.resolution.height}</span>
-                <span className="bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">{project.settings.fps} FPS</span>
-            </div>
-            <button 
-                onClick={() => setExportPanelOpen(true)}
-                className="bg-white hover:bg-zinc-200 text-black px-4 py-1.5 rounded-full text-sm font-bold transition-colors flex items-center gap-2"
-            >
-                <Share size={14} /> Export
-            </button>
+
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={() => setIsExportOpen(true)}
+            className="text-xs bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-3 py-1.5 rounded border border-zinc-700 font-medium transition flex items-center gap-2"
+          >
+            <Share size={14} /> Export
+          </button>
+          <button 
+            onClick={() => { setGenModalType(MediaType.IMAGE); setIsGenModalOpen(true); }}
+            className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded font-bold transition flex items-center gap-2 shadow-lg shadow-blue-900/20"
+          >
+            <MonitorPlay size={14} /> Generate Media
+          </button>
         </div>
       </header>
 
       {/* MAIN WORKSPACE */}
       <div className="flex-1 flex overflow-hidden">
         
-        {/* LEFT PANEL: Media */}
-        <div className="w-72 flex flex-col border-r border-zinc-800 bg-zinc-900 flex-shrink-0">
-            <div className="p-3 border-b border-zinc-800">
-                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Media Bin</h3>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
-                <div className="grid grid-cols-2 gap-3">
-                     <div onClick={() => fileInputRef.current?.click()} className="aspect-square border-2 border-dashed border-zinc-700 hover:border-accent-500 rounded flex flex-col items-center justify-center text-zinc-500 hover:text-accent-500 cursor-pointer bg-zinc-900/50 transition-all">
-                        <Upload size={20} />
-                        <span className="text-[10px] font-bold mt-2 uppercase">Import</span>
-                        <input type="file" ref={fileInputRef} className="hidden" />
-                    </div>
-                    {project.assets.map(asset => (
-                        <div key={asset.id} className="aspect-square bg-black rounded border border-zinc-800 overflow-hidden relative group cursor-grab active:cursor-grabbing">
-                            <img src={asset.thumbnail || asset.url} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity" />
-                            <span className="absolute bottom-1 left-1 text-[9px] text-white font-medium drop-shadow">{asset.name}</span>
-                        </div>
-                    ))}
-                </div>
-            </div>
+        {/* Left: Tools */}
+        <div className="w-16 border-r border-zinc-800 bg-zinc-900 flex flex-col items-center py-4 gap-6 z-20">
+          <div 
+            onClick={() => fileInputRef.current?.click()}
+            className="p-3 bg-zinc-800 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-700 cursor-pointer transition-all" 
+            title="Import Media"
+          >
+             <Upload size={20} />
+             <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" multiple />
+          </div>
         </div>
 
-        {/* CENTER: Viewer */}
-        <div className="flex-1 flex flex-col bg-zinc-950 relative">
-             <div className="flex-1 flex items-center justify-center p-8">
-                <div className="aspect-video bg-black w-full max-w-4xl border border-zinc-800 shadow-2xl relative ring-1 ring-zinc-900 overflow-hidden group">
-                     <WebGLRenderer currentTime={project.currentTime} clips={project.clips} assets={project.assets} isPlaying={project.isPlaying} />
-                     {/* Controls Overlay */}
-                     <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex items-center gap-4 bg-zinc-900/80 backdrop-blur px-6 py-2 rounded-full border border-zinc-700 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0">
-                        <SkipBack size={18} className="cursor-pointer hover:text-white" onClick={() => setProject(p => ({...p, currentTime: 0}))}/>
-                        <button onClick={() => setProject(p => ({ ...p, isPlaying: !p.isPlaying }))}>
-                            {project.isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
-                        </button>
-                        <SkipForward size={18} className="cursor-pointer hover:text-white" />
-                     </div>
-                </div>
-            </div>
+        {/* Center: Player & Transport */}
+        <div className="flex-1 flex flex-col bg-zinc-950 relative border-r border-zinc-800">
+          <div className="flex-1 flex items-center justify-center p-8 bg-zinc-950/50">
+             <div className="aspect-video bg-black w-full max-w-4xl border border-zinc-800 shadow-2xl relative ring-1 ring-zinc-900 overflow-hidden">
+                 <Player />
+             </div>
+          </div>
+          
+          {/* Transport Controls */}
+          <div className="h-14 border-t border-zinc-800 flex items-center justify-center gap-6 bg-zinc-900 z-20">
+             <button onClick={() => setPlayheadTime(0)} className="text-zinc-500 hover:text-white transition"><SkipBack size={20} /></button>
+             <button onClick={togglePlayback} className="bg-white text-black rounded-full p-3 hover:bg-zinc-200 transition transform active:scale-95 shadow-lg">
+                {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" className="ml-1" />}
+             </button>
+             <div className="font-mono text-sm text-zinc-500 w-24 text-center bg-zinc-950 py-1 rounded border border-zinc-800">
+                {new Date(playheadTime * 1000).toISOString().substr(11, 8)}
+             </div>
+          </div>
         </div>
 
-        {/* RIGHT PANEL: Inspector / AI Brain */}
-        <div className="w-80 flex flex-col border-l border-zinc-800 bg-zinc-900 flex-shrink-0">
-             <InspectorPanel 
-                selectedClip={selectedClip}
-                onUpdateClip={handleClipChange}
-                onGenerateFirstFrame={handleGenerateFirstFrame}
-                onGenerateVideo={handleGenerateVideo}
-                onLipsync={() => alert("Lipsync job started")}
-             />
+        {/* Right: Inspector */}
+        <div className="w-80 bg-zinc-900 flex flex-col z-20 shadow-xl">
+           <InspectorPanel onOpenGenModal={(type) => { setGenModalType(type); setIsGenModalOpen(true); }} />
         </div>
-
       </div>
 
-      {/* BOTTOM: Timeline */}
-      <div className="h-[320px] border-t border-zinc-800 flex flex-col bg-zinc-950 relative shadow-[0_-10px_30px_rgba(0,0,0,0.3)] z-40">
-         <Timeline 
-            tracks={project.tracks} 
-            clips={project.clips} 
-            currentTime={project.currentTime} 
-            zoomLevel={project.zoomLevel}
-            selectedClipIds={project.selection}
-            onSeek={(t) => setProject(p => ({ ...p, currentTime: t }))}
-            onClipChange={handleClipChange}
-            onClipSelect={handleClipSelect}
-            onClipContextMenu={(e, clip) => {}}
-            onDrawClip={handleDrawClip}
-            onContextAction={handleContextAction}
-         />
+      {/* Bottom: Timeline */}
+      <div className="h-[300px] border-t border-zinc-800 bg-zinc-950 relative shadow-[0_-10px_30px_rgba(0,0,0,0.5)] z-30">
+         <Timeline />
       </div>
 
-      {/* EXPORT MODAL */}
-      <ExportPanel isOpen={exportPanelOpen} onClose={() => setExportPanelOpen(false)} onStartExport={handleStartExport} />
-
+      {/* Modals */}
+      <GenerationModal 
+        isOpen={isGenModalOpen} 
+        onClose={() => setIsGenModalOpen(false)} 
+        initialType={genModalType}
+      />
+      
+      <ExportPanel 
+        isOpen={isExportOpen}
+        onClose={() => setIsExportOpen(false)}
+        onStartExport={handleStartExport}
+      />
     </div>
   );
 }

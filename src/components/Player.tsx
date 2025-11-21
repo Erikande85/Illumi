@@ -1,71 +1,112 @@
-
 import React, { useEffect, useRef } from 'react';
 import { useStore } from '../store/useStore';
-import { MediaType } from '../types';
+import { MediaType, Clip } from '../types';
 
+/**
+ * DOM-BASED INTERACTIVE PLAYER
+ * Uses standard HTML5 Video elements for maximum performance and compatibility during editing.
+ * 
+ * Pros:
+ * - Zero decoding overhead (browser handles it)
+ * - Instant scrubbing
+ * - CSS transforms mirror Canvas transforms easily
+ */
 export const Player: React.FC = () => {
-  const { clips, playheadTime, isPlaying } = useStore();
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const { getFrameData, playheadTime, isPlaying, settings } = useStore();
+  
+  // Get currently visible clips
+  const activeClips = getFrameData(playheadTime);
 
-  // Find the top-most visible clip at the current playhead time
-  // Logic: V2 > V1
-  const activeClip = clips
-    .filter(c => (c.trackId === 'V1' || c.trackId === 'V2') && 
-                 playheadTime >= c.startTime && 
-                 playheadTime < (c.startTime + c.duration))
-    .sort((a, b) => b.trackId.localeCompare(a.trackId))[0];
-
-  // Sync Playback State & Time
-  useEffect(() => {
-    if (activeClip && activeClip.type === MediaType.VIDEO && videoRef.current) {
-        const video = videoRef.current;
-        const offsetTime = playheadTime - activeClip.startTime + activeClip.offset;
-        
-        // Only seek if drift is significant to avoid stutter
-        if (Math.abs(video.currentTime - offsetTime) > 0.3) {
-            video.currentTime = offsetTime;
-        }
-
-        if (isPlaying && video.paused) {
-            video.play().catch(() => {});
-        } else if (!isPlaying && !video.paused) {
-            video.pause();
-        }
-    }
-  }, [playheadTime, isPlaying, activeClip]);
-
-  if (!activeClip) {
-    return (
-        <div className="text-zinc-600 font-mono text-sm flex items-center gap-2">
-            <div className="w-3 h-3 bg-zinc-800 rounded-full animate-pulse" />
-            No Media at Playhead
-        </div>
-    );
-  }
-
-  // Render Content
   return (
-    <div className="w-full h-full flex items-center justify-center bg-black relative overflow-hidden">
-        {activeClip.type === MediaType.VIDEO ? (
-            <video 
-                ref={videoRef}
-                src={activeClip.url} // Uses the url property added to Clip interface
-                className="max-h-full max-w-full object-contain"
-                playsInline
-                muted // Muted for auto-play policy compliance
-            />
-        ) : (
-            <img 
-                src={activeClip.url} 
-                className="max-h-full max-w-full object-contain" 
-                alt="Active Frame" 
-            />
-        )}
-        
-        {/* Debug Info Overlay */}
-        <div className="absolute top-2 left-2 bg-black/50 px-2 py-1 rounded text-[10px] text-zinc-400 font-mono pointer-events-none">
-            {activeClip.name} | {(playheadTime - activeClip.startTime).toFixed(2)}s
-        </div>
+    <div 
+      className="relative overflow-hidden bg-black shadow-2xl"
+      style={{ 
+        aspectRatio: `${settings.resolution.width}/${settings.resolution.height}`,
+        width: '100%',
+        height: '100%',
+        maxHeight: '100%'
+      }}
+    >
+      {activeClips.length === 0 ? (
+         <div className="absolute inset-0 flex items-center justify-center text-zinc-800 font-mono text-sm">
+            ILLUMI PLAYER
+         </div>
+      ) : (
+        activeClips.map(clip => (
+          <PlayerLayer 
+            key={clip.id} 
+            clip={clip} 
+            globalTime={playheadTime} 
+            isPlaying={isPlaying} 
+          />
+        ))
+      )}
+      
+      {/* Debug Overlay */}
+      <div className="absolute bottom-4 right-4 font-mono text-xs text-green-400 bg-black/80 px-2 py-1 rounded pointer-events-none z-50">
+        {playheadTime.toFixed(2)}s | {activeClips.length} Layers
+      </div>
     </div>
   );
+};
+
+/**
+ * Individual Layer Component
+ * Handles the specific video element logic (seeking vs playing)
+ */
+const PlayerLayer: React.FC<{ clip: Clip; globalTime: number; isPlaying: boolean }> = ({ clip, globalTime, isPlaying }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  
+  // Calculate local time within the source clip
+  const localTime = (globalTime - clip.startTime) + clip.offset;
+
+  useEffect(() => {
+    if (clip.type !== MediaType.VIDEO || !videoRef.current) return;
+    
+    const vid = videoRef.current;
+
+    // If playing, we let the browser handle the flow, mostly only correcting if drift occurs
+    if (isPlaying) {
+       if (vid.paused) vid.play().catch(() => {});
+       // Sync check: only seek if significantly off (> 0.3s) to avoid stutter
+       if (Math.abs(vid.currentTime - localTime) > 0.3) {
+          vid.currentTime = localTime;
+       }
+    } else {
+       // If paused/scrubbing, we enforce the time strictly
+       vid.pause();
+       // Strict sync when scrubbing
+       if (Math.abs(vid.currentTime - localTime) > 0.05) {
+           vid.currentTime = localTime;
+       }
+    }
+    
+    vid.volume = clip.volume ?? 1.0;
+
+  }, [globalTime, isPlaying, localTime, clip.volume]);
+
+  // CSS Transform Logic
+  // Maps normalized coordinates (0..1) to Percentage-based positioning
+  const style: React.CSSProperties = {
+    position: 'absolute',
+    left: `${(clip.x ?? 0.5) * 100}%`,
+    top: `${(clip.y ?? 0.5) * 100}%`,
+    width: '100%', // Base width is container width, scaled down
+    height: '100%',
+    transform: `translate(-50%, -50%) rotate(${clip.rotation ?? 0}deg) scale(${clip.scale ?? 1})`,
+    opacity: clip.opacity ?? 1.0,
+    objectFit: 'contain',
+    pointerEvents: 'none', // Click-through to container
+    zIndex: clip.zIndex
+  };
+
+  if (clip.type === MediaType.VIDEO) {
+    return <video ref={videoRef} src={clip.url} style={style} muted playsInline />;
+  }
+
+  if (clip.type === MediaType.IMAGE) {
+    return <img src={clip.url} style={style} alt="layer" />;
+  }
+
+  return null;
 };

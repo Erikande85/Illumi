@@ -1,3 +1,4 @@
+
 import { create } from 'zustand';
 import { Clip, Track, ProjectSettings } from '../types';
 
@@ -21,9 +22,6 @@ interface ProjectState {
   togglePlayback: () => void;
   setIsPlaying: (isPlaying: boolean) => void;
   selectClip: (id: string | null) => void;
-  
-  // Selectors
-  getFrameData: (time: number) => Clip[];
 }
 
 const INITIAL_TRACKS: Track[] = [
@@ -33,7 +31,7 @@ const INITIAL_TRACKS: Track[] = [
   { id: 'A2', name: 'Audio 2', type: 'audio', isMuted: false, isLocked: false },
 ];
 
-export const useStore = create<ProjectState>((set, get) => ({
+export const useStore = create<ProjectState>((set) => ({
   hasProject: false,
   clips: [],
   tracks: INITIAL_TRACKS,
@@ -41,7 +39,7 @@ export const useStore = create<ProjectState>((set, get) => ({
   zoom: 50,
   isPlaying: false,
   selectedClipId: null,
-  settings: { resolution: { width: 1920, height: 1080 }, fps: 30, aspectRatio: '16:9' },
+  settings: { resolution: { width: 1920, height: 1080 }, fps: 24, aspectRatio: '16:9' },
 
   createNewProject: () => set({ 
     hasProject: true, 
@@ -52,16 +50,7 @@ export const useStore = create<ProjectState>((set, get) => ({
   }),
 
   addClip: (clip) => set((state) => ({ 
-    clips: [...state.clips, { 
-      ...clip, 
-      volume: clip.volume ?? 1.0,
-      x: clip.x ?? 0.5, // Center default
-      y: clip.y ?? 0.5,
-      scale: clip.scale ?? 1.0,
-      rotation: clip.rotation ?? 0,
-      zIndex: clip.trackId === 'V2' ? 2 : 1,
-      opacity: clip.opacity ?? 1.0
-    }] 
+    clips: [...state.clips, { ...clip, volume: clip.volume ?? 1.0 }] 
   })),
 
   removeClip: (id) => set((state) => ({ 
@@ -81,12 +70,4 @@ export const useStore = create<ProjectState>((set, get) => ({
   setIsPlaying: (isPlaying) => set({ isPlaying }),
 
   selectClip: (id) => set({ selectedClipId: id }),
-
-  // Derived Selector: Efficiently gets clips active at current time
-  getFrameData: (time: number) => {
-    const { clips } = get();
-    return clips
-      .filter(c => time >= c.startTime && time < c.startTime + c.duration)
-      .sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
-  }
 }));
