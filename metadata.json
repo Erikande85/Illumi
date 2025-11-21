@@ -1,0 +1,7 @@
+{
+  "name": "Illumi NLE",
+  "description": "A professional, AI-native hybrid Non-Linear Editor featuring local and cloud inference pipelines.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
